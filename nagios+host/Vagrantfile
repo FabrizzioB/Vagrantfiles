@@ -1,0 +1,149 @@
+
+# Documentation for Vagrant: https://docs.vagrantup.com
+# Vagrant development environment boxes: https://vagrantcloud.com/search
+Vagrant.configure("2") do |config|
+   config.vm.define "nagios_monitoring_server" do |nagios_monitoring_server|
+      # BOX CONFIGURATION
+      nagios_monitoring_server.vm.box = "envimation/ubuntu-xenial"
+      # NETWORKING CONFIGURATION
+      nagios_monitoring_server.vm.network "forwarded_port", guest: 80, host: 8013
+      nagios_monitoring_server.vm.network "private_network", type: "static",  ip: "192.168.56.13"
+      # PROVIDER CONFIGURATION
+      nagios_monitoring_server.vm.provider "virtualbox" do |vb|
+      #  vb.gui = false
+      #  vb.memory = "1024"
+      #  vb.cpus = 2
+      end
+
+      # Enable provisioning with a shell script. Additional provisioners such as
+      # Ansible, Chef, Docker, Puppet and Salt are also available. Please see the
+      # documentation for more information about their specific syntax and use.
+      nagios_monitoring_server.vm.provision "shell", inline: <<-SHELL
+         sudo apt-get update
+         sudo apt-get install -y autoconf gcc libc6 make wget unzip apache2 \
+         php libapache2-mod-php7.0 libgd2-xpm-dev
+         # Download and install nagios
+         cd /tmp 
+         wget -O nagioscore.tar.gz https://github.com/NagiosEnterprises/nagioscore/archive/nagios-4.4.6.tar.gz 
+         tar xzf nagioscore.tar.gz
+
+         cd nagioscore-nagios-4.4.6/
+         sudo ./configure --with-httpd-conf=/etc/apache2/sites-enabled
+         sudo make all
+
+         # Create User and Group
+         sudo useradd nagios
+         sudo usermod -a -G nagios www-data
+
+         # Install the binaries
+         sudo make install
+
+         # Install Service/Daemon
+         sudo make install-daemoninit
+
+         # Install Command Mode
+         sudo make install-commandmode
+
+         # Install Configuration Files
+         sudo make install-config
+
+         # Install Apache Config Files
+         sudo make install-webconf
+
+         sudo a2enmod rewrite
+         
+         # Go to the apache2 conf file and add
+         export append_server_name="ServerName nagios_monitoring_server"
+         export file="/etc/apache2/apache2.conf"
+         echo "$append_server_name" | sudo tee -a "$file"
+         sudo a2enmod cgi
+
+         # Create nagiosadmin User Account
+         sudo htpasswd -c -b /usr/local/nagios/etc/htpasswd.users nagiosadmin nagiosadmin
+
+         # Start the Apache Web Server
+         sudo systemctl restart apache2.service
+         # Start Service/Daemon
+         sudo systemctl start nagios.service
+
+         # Installing the Nagios Plugins
+         sudo apt-get install -y autoconf gcc libc6 libmcrypt-dev make libssl-dev wget bc gawk dc build-essential snmp libnet-snmp-perl gettext iputils-ping
+         cd /tmp
+         sudo wget --no-check-certificate -O nagios-plugins.tar.gz https://github.com/nagios-plugins/nagios-plugins/archive/release-2.3.3.tar.gz
+         tar zxf nagios-plugins.tar.gz
+         cd nagios-plugins-release-2.3.3/
+         sudo apt-get install -y autotools-dev automake
+         sudo ./tools/setup && sudo ./configure
+         sudo make && sudo make install
+
+         # Verify the Nagios Config File
+         sudo /usr/local/nagios/bin/nagios -v /usr/local/nagios/etc/nagios.cfg
+
+         # Restarting Nagios
+         sudo systemctl restart nagios.service
+
+         ## Install Nagios Plugins and NRPE Server
+         #sudo apt-get install -y nagios-plugins
+         sudo apt-get install -y nagios-nrpe-server
+         sudo systemctl restart nagios-nrpe-server
+
+         # Installing sendemail for notifications...
+         sudo apt-get install -y libio-socket-ssl-perl libnet-ssleay-perl libcrypt-ssleay-perl 
+         sudo apt-get install -y sendemail
+
+         # Restarting Nagios
+         sudo systemctl restart nagios.service
+         SHELL
+   end
+
+   config.vm.define "remote_host" do |remote_host|
+      remote_host.vm.box = "envimation/ubuntu-xenial"
+      # config.vm.box_check_update = false
+      
+      # NETWORKING CONFIGURATION
+      remote_host.vm.network "forwarded_port", guest: 80, host: 8014
+
+      remote_host.vm.network "private_network", type: "static", ip: "192.168.56.14"
+  
+      # PROVIDER CONFIGURATION
+      remote_host.vm.provider "virtualbox" do |vb_resource|
+      #   vb.gui = true
+      #   vb_resource.memory = "1024"
+      #   vb.cpus = 2
+      end
+  
+      remote_host.vm.provision "shell", inline: <<-SHELL
+        sudo apt-get update && sudo apt-get upgrade -y
+        # due to error at vagrant up start
+        sudo apt install -y inetutils-inetd
+        
+        # Installing the Nagios Plugins
+        sudo apt-get install -y autoconf gcc libc6 libmcrypt-dev make libssl-dev wget bc gawk dc build-essential snmp libnet-snmp-perl gettext iputils-ping
+        cd /tmp
+        sudo wget --no-check-certificate -O nagios-plugins.tar.gz https://github.com/nagios-plugins/nagios-plugins/archive/release-2.3.3.tar.gz
+        tar zxf nagios-plugins.tar.gz
+        cd nagios-plugins-release-2.3.3/
+        sudo apt-get install -y autotools-dev automake
+        sudo ./tools/setup && sudo ./configure
+        sudo make && sudo make install
+
+        # Installing Nagios Agent
+        cd /tmp
+        wget https://assets.nagios.com/downloads/nagiosxi/agents/linux-nrpe-agent.tar.gz
+        sudo tar xzf linux-nrpe-agent.tar.gz
+        cd linux-nrpe-agent -i 192.168.56.13
+        sudo ./fullinstall
+  
+        # Installing Tomcat
+        sudo apt-get install -y tomcat8
+        sudo systemctl start tomcat8
+        sudo apt-get install tomcat8-admin
+        sudo apt-get install tomcat8-examples
+        sudo apt-get install tomcat8-docs
+        sudo systemctl restart tomcat8
+        sudo systemctl restart inetd
+        
+      SHELL
+      end
+end
+
